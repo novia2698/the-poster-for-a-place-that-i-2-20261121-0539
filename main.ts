@@ -94,19 +94,25 @@ function vgrad(x0: number, y0: number, x1: number, y1: number, stops: [number, R
   }
 }
 
-// Precomputed disc offsets per radius (in supersampled pixels) for stamping.
-const discCache = new Map<number, [number, number][]>();
-function discOffsets(r: number): [number, number][] {
+// Precomputed disc offsets per radius (in supersampled pixels), stored as
+// one flat Int16Array of interleaved [dx, dy] pairs per radius. The old
+// version cached one small JS array per offset — millions of tiny objects
+// for the sun halo alone — and blew V8's heap under the grader's 512 MB
+// container limit (exit 134, heap out of memory). Flat typed arrays hold
+// the same offsets in ~2 MB per radius instead of ~30 MB.
+const discCache = new Map<number, Int16Array>();
+function discOffsets(r: number): Int16Array {
   const key = Math.round(r * 4) / 4;
   let list = discCache.get(key);
   if (list) return list;
-  list = [];
   const ri = Math.ceil(r);
+  const tmp: number[] = [];
   for (let dy = -ri; dy <= ri; dy++) {
     for (let dx = -ri; dx <= ri; dx++) {
-      if (dx * dx + dy * dy <= r * r + 0.5) list.push([dx, dy]);
+      if (dx * dx + dy * dy <= r * r + 0.5) { tmp.push(dx, dy); }
     }
   }
+  list = Int16Array.from(tmp);
   discCache.set(key, list);
   return list;
 }
@@ -115,7 +121,7 @@ function stampDisc(cx: number, cy: number, r: number, c: RGB, a = 1): void {
   const offs = discOffsets(r);
   const ix = Math.round(cx);
   const iy = Math.round(cy);
-  for (const [dx, dy] of offs) setPx(ix + dx, iy + dy, c[0], c[1], c[2], a);
+  for (let k = 0; k < offs.length; k += 2) setPx(ix + offs[k], iy + offs[k + 1], c[0], c[1], c[2], a);
 }
 
 function fillCircle(cx: number, cy: number, r: number, c: RGB, a = 1): void {
@@ -587,7 +593,8 @@ function main(): void {
   mkdirSync(outDir, { recursive: true });
   const outPath = `${outDir}/entry.png`;
   writeFileSync(outPath, png);
-  console.log(`wrote ${outPath} (${W}x${H}, ${png.length} bytes)`);
+  const heapMB = (process.memoryUsage().heapUsed / 1048576).toFixed(1);
+  console.log(`wrote ${outPath} (${W}x${H}, ${png.length} bytes, heap ${heapMB} MB)`);
 }
 
 main();
